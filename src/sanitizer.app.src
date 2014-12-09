@@ -1,0 +1,14 @@
+{application, sanitizer,
+ [
+  {description, "An Erlang sanitizer library"},
+  {vsn, "1"},
+  {modules, [
+             sanitizer
+            ]},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {env, []}
+ ]}.
