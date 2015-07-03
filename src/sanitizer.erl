@@ -27,7 +27,7 @@
 
 -module(sanitizer).
 
--include_lib("include/sanitizer.hrl").
+-include_lib("sanitizer/include/sanitizer.hrl").
 
 -export([sanitize/2]).
 
