@@ -33,5 +33,5 @@
 -type spec_constraint_key() :: gt | gte | le | lte.
 -type spec_constraint() :: {spec_constraint_key(), any()}.
 
--type specs() :: map(atom(), [spec()] | spec_typedesc()).
+-type specs() :: #{atom() => [spec()] | spec_typedesc()}.
 -type spec() :: spec_typedesc() | spec_constraint().

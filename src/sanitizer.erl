@@ -119,7 +119,7 @@ validate_key(Key) when is_binary(Key) ->
     end;
 validate_key(Key) -> throw({badarg, {badkey, Key}}).
 
--spec sanitize(specs(), any()) -> map(atom(), any()).
+-spec sanitize(specs(), any()) -> #{atom() => any()}.
 sanitize(Spec, Args) ->
     AtomArgs = lists:map(fun({Key, Val}) -> {validate_key(Key), Val} end, maps:to_list(Args)),
     SanitizeKey = fun({Key, DescList}) ->
