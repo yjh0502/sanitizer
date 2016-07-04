@@ -51,6 +51,16 @@ validate_type(int, Given) when is_binary(Given) ->
         Out -> Out
     catch error:badarg -> throw({badarg, {shouldint, Given}}) end;
 
+validate_type(float, Given) when is_number(Given) -> Given;
+validate_type(float, Given) when is_list(Given) ->
+    validate_type(float, list_to_binary(Given));
+validate_type(float, Given) when is_binary(Given) ->
+    try binary_to_integer(Given) of Out -> Out
+    catch error:badarg ->
+        try binary_to_float(Given) of Out -> Out
+        catch error:badarg -> throw({badarg, {shouldfloat, Given}}) end
+    end;
+
 validate_type(atom, Given) when is_atom(Given) -> Given;
 validate_type(atom, Given) when is_binary(Given) ->
     try binary_to_existing_atom(Given, utf8) of Atom -> Atom
@@ -62,21 +72,21 @@ validate_type(binary, Given) when is_atom(Given) -> atom_to_binary(Given, utf8);
 validate_type(binary, Given) when is_list(Given) -> list_to_binary(Given);
 validate_type(binary, Given) when is_integer(Given) -> integer_to_binary(Given);
 
-validate_type([map, _KeySpec, _ValueSpec] = Spec, Given) when is_map(Given) ->
+validate_type({map, _KeySpec, _ValueSpec} = Spec, Given) when is_map(Given) ->
     validate_type(Spec, maps:to_list(Given));
-validate_type([map, KeySpec, ValueSpec], Given) when is_list(Given) ->
+validate_type({map, KeySpec, ValueSpec}, Given) when is_list(Given) ->
     ValidateFunc = fun({Key, Value}) ->
         {validate_constraint(KeySpec, Key), validate_constraint(ValueSpec, Value)}
     end,
     maps:from_list(lists:map(ValidateFunc, Given));
 
-validate_type([list, Spec], Given) when is_list(Given) ->
+validate_type({list, Spec}, Given) when is_list(Given) ->
     ValidateFunc = fun(Item) ->
         validate_type(Spec, Item)
     end,
     lists:map(ValidateFunc, Given);
-validate_type([list, Spec], Given) ->
-    validate_type([list, Spec], [Given]);
+validate_type({list, Spec}, Given) ->
+    validate_type({list, Spec}, [Given]);
 
 validate_type(_Type, _Spec) ->
     throw(badspec).
@@ -106,7 +116,7 @@ validate_constraint([{optional, _} | T], Value) ->
 validate_constraint([], Value) -> Value;
 
 %% Shortcut: TypeSpec -> [{type, TypeSpec}]
-validate_constraint(TypeSpec, Value) when is_atom(TypeSpec); is_list(TypeSpec) ->
+validate_constraint(TypeSpec, Value) when is_atom(TypeSpec); is_tuple(TypeSpec) ->
     validate_type(TypeSpec, Value);
 
 validate_constraint(_Spec, _Value) ->
@@ -122,15 +132,10 @@ validate_key(Key) -> throw({badarg, {badkey, Key}}).
 -spec sanitize(specs(), any()) -> #{atom() => any()}.
 sanitize(Spec, Args) ->
     AtomArgs = lists:map(fun({Key, Val}) -> {validate_key(Key), Val} end, maps:to_list(Args)),
-    SanitizeKey = fun({Key, KeySpec}) ->
-        DescList = case KeySpec of
-            Atom when is_atom(Atom) ->
-                #{type => Atom};
-            _ -> KeySpec
-        end,
-        Optional = case maps:get(optional, DescList, false) of
-            true -> true;
-            false -> false
+    SanitizeKey = fun({Key, DescSpec}) ->
+        Optional = case DescSpec of
+            #{optional := O} -> O;
+            _ -> false
         end,
         case {Optional, lists:keyfind(Key, 1, AtomArgs)} of
             {true, false} ->
@@ -140,7 +145,7 @@ sanitize(Spec, Args) ->
             {false, false} ->
                 throw({badarg, {badkey, Key}});
             {_, {_, Value}} ->
-                try {Key, validate_constraint(DescList, Value)} of
+                try {Key, validate_constraint(DescSpec, Value)} of
                     Sanitized -> Sanitized
                 catch
                     throw:{badarg, Reason} ->
@@ -156,46 +161,48 @@ sanitize(Spec, Args) ->
 
 -define(badarg,  {badarg, _}).
 
-constraint_test() ->
+constraint_test_() ->
     F = fun validate_constraint/2,
-    ?assertEqual(1, F(#{type => int, gte => 1}, 1)),
-    ?assertEqual(1, F([{type, int}, {gt, 0}], 1)),
-    ?assertEqual(1, F([{type, int}, {lte, 1}], 1)),
-    ?assertEqual(1, F([{type, int}, {lte, 2}], 1)),
+    [
+    ?_assertEqual(1, F(#{type => int, gte => 1}, 1)),
+    ?_assertEqual(1, F([{type, int}, {gt, 0}], 1)),
+    ?_assertEqual(1, F([{type, int}, {lte, 1}], 1)),
+    ?_assertEqual(1, F([{type, int}, {lte, 2}], 1)),
 
-    ?assertThrow(?badarg, F([{type, int}, {lte, 0}], 1)),
-    ?assertThrow(?badarg, F([{type, int}, {lt, 1}], 1)),
-    ?assertThrow(?badarg, F([{type, int}, {gte, 2}], 1)),
-    ?assertThrow(?badarg, F([{type, int}, {gt, 1}], 1)),
-    ?assertThrow(?badarg, F([{type, int}, {gt, 0}], <<"-1">>)),
+    ?_assertThrow(?badarg, F([{type, int}, {lte, 0}], 1)),
+    ?_assertThrow(?badarg, F([{type, int}, {lt, 1}], 1)),
+    ?_assertThrow(?badarg, F([{type, int}, {gte, 2}], 1)),
+    ?_assertThrow(?badarg, F([{type, int}, {gt, 1}], 1)),
+    ?_assertThrow(?badarg, F([{type, int}, {gt, 0}], <<"-1">>)),
 
-    ?assertThrow(badspec, F([{type, int}, {gt, 0, 1}], 1)).
+    ?_assertThrow(badspec, F([{type, int}, {gt, 0, 1}], 1))
+    ].
 
 sanitize_test_inputs(Expected, Spec, Inputs) ->
     lists:map(fun(Input) ->
-        ?assertEqual(Expected, sanitize(Spec, Input))
+        ?_assertEqual(Expected, sanitize(Spec, Input))
     end, Inputs).
 
-sanitize_test() ->
-    ?assertThrow(?badarg, sanitize(#{hello => #{type => int}}, #{})),
-    ?assertThrow(?badarg, sanitize(#{hello => #{type => binary}}, #{})),
-    ?assertThrow(?badarg, sanitize(#{hello => #{type => int}}, #{hello => <<"world">>})),
-    ?assertEqual(#{}, sanitize(#{}, #{})),
-    ?assertEqual(#{hello => 1},
+sanitize_test_() -> [
+    ?_assertThrow(?badarg, sanitize(#{hello => #{type => int}}, #{})),
+    ?_assertThrow(?badarg, sanitize(#{hello => #{type => binary}}, #{})),
+    ?_assertThrow(?badarg, sanitize(#{hello => #{type => int}}, #{hello => <<"world">>})),
+    ?_assertEqual(#{}, sanitize(#{}, #{})),
+    ?_assertEqual(#{hello => 1},
         sanitize(#{hello => #{type => int}}, #{<<"hello">> => <<"1">>})),
 
-    ?assertEqual(#{hello => true},
-        sanitize(#{hello => #{type => bool}}, #{<<"hello">> => true})),
-
-    sanitize_test_inputs(
+    ?_assertEqual(#{hello => true},
+        sanitize(#{hello => #{type => bool}}, #{<<"hello">> => true}))
+    ]
+    ++ sanitize_test_inputs(
         #{hello => #{<<"hello">> => 1}},
-        #{hello => [map, binary, #{type=>int, gte=>0}]},
+        #{hello => {map, binary, #{type=>int, gte=>0}}},
         [
             #{hello => #{<<"hello">> => 1}},
             #{hello => [{<<"hello">>, 1}]}
-        ]),
+        ])
 
-    sanitize_test_inputs(
+    ++ sanitize_test_inputs(
         #{hello => 1},
         #{hello => #{type => int}},
         [
@@ -204,21 +211,22 @@ sanitize_test() ->
             #{hello => <<"1">>}
         ]).
 
-sanitize_invalid_key_test() ->
-    ?assertThrow(?badarg,
+sanitize_invalid_key_test_() -> [
+    ?_assertThrow(?badarg,
         sanitize(#{hello => #{type => int}}, #{<<"hello1234">> => <<"1">>})),
-    ?assertThrow(?badarg,
-        sanitize(#{hello => #{type => int}}, #{"1234" => <<"1">>})).
+    ?_assertThrow(?badarg,
+        sanitize(#{hello => #{type => int}}, #{"1234" => <<"1">>}))
+    ].
 
-sanitize_order_test() ->
+sanitize_order_test_() ->
     sanitize_test_inputs(
         #{hello => 1, world => <<"world">>},
         #{hello => #{type => int}, world => #{type => binary}},
         [
             #{hello => 1, world => world},
             #{world => <<"world">>, hello => <<"1">>}
-        ]),
-    sanitize_test_inputs(
+        ])
+    ++ sanitize_test_inputs(
         #{world => <<"world">>, hello => 1},
         #{world => #{type => binary}, hello => #{type => int}},
         [
@@ -226,67 +234,85 @@ sanitize_order_test() ->
             #{world => <<"world">>, hello => <<"1">>}
         ]).
 
-sanitize_shortcuts_test() ->
-    ?assertEqual(#{hello => 1},
+sanitize_shortcuts_test_() -> [
+    ?_assertEqual(#{hello => 1},
         sanitize(#{hello => #{type => int}}, #{hello => <<"1">>})),
-    ?assertEqual(#{hello => [1,2]},
-        sanitize(#{hello => [list, int]}, #{hello => [<<"1">>, "2"]})).
+    ?_assertEqual(#{hello => [1,2]},
+        sanitize(#{hello => {list, int}}, #{hello => [<<"1">>, "2"]}))
+    ].
 
-sanitize_optional_test() ->
-    ?assertEqual(#{hello => 1, world => undefined},
+sanitize_optional_test_() -> [
+    ?_assertEqual(#{hello => 1, world => undefined},
         sanitize(#{hello => #{type => int}, world => #{type => int, optional => true}},
             #{hello => <<"1">>})),
-    ?assertEqual(#{hello => 1, world => undefined},
+    ?_assertEqual(#{hello => 1, world => undefined},
         sanitize(#{hello => #{type => int}, world => #{type => int, optional => true}},
             #{hello => <<"1">>, world => <<"">>})),
-    ?assertEqual(#{hello => 1},
+    ?_assertEqual(#{hello => 1},
         sanitize(#{hello => #{type => int, optional => false}},
-            #{hello => <<"1">>})).
+            #{hello => <<"1">>}))
+    ].
 
-validate_type_bool_test() ->
-    ?assertEqual(true, validate_type(bool, true)),
-    ?assertEqual(false, validate_type(bool, false)),
-    ?assertEqual(true, validate_type(bool, <<"true">>)),
-    ?assertEqual(false, validate_type(bool, <<"false">>)),
-    ?assertEqual(false, validate_type(bool, 0)),
-    ?assertEqual(true, validate_type(bool, 1)),
-    ?assertEqual(true, validate_type(bool, 10)),
-    ?assertThrow(?badarg, validate_type(bool, <<"hello">>)).
+validate_type_bool_test_() -> [
+        ?_assertEqual(true, validate_type(bool, true)),
+        ?_assertEqual(false, validate_type(bool, false)),
+        ?_assertEqual(true, validate_type(bool, <<"true">>)),
+        ?_assertEqual(false, validate_type(bool, <<"false">>)),
+        ?_assertEqual(false, validate_type(bool, 0)),
+        ?_assertEqual(true, validate_type(bool, 1)),
+        ?_assertEqual(true, validate_type(bool, 10)),
+        ?_assertThrow(?badarg, validate_type(bool, <<"hello">>))
+    ].
 
-validate_type_int_test() ->
-    ?assertEqual(1, validate_type(int, 1)),
-    ?assertEqual(1, validate_type(int, "1")),
-    ?assertEqual(1, validate_type(int, <<"1">>)),
-    ?assertThrow(?badarg, validate_type(int, <<"hello">>)),
-    ?assertThrow(?badarg, validate_type(int, <<"1.234">>)).
+validate_type_int_test_() -> [
+    ?_assertEqual(1, validate_type(int, 1)),
+    ?_assertEqual(1, validate_type(int, "1")),
+    ?_assertEqual(1, validate_type(int, <<"1">>)),
+    ?_assertThrow(?badarg, validate_type(int, <<"hello">>)),
+    ?_assertThrow(?badarg, validate_type(int, <<"1.234">>))
+    ].
 
-validate_type_atom_test() ->
-    ?assertEqual(hello, validate_type(atom, hello)),
-    ?assertEqual(hello, validate_type(atom, <<"hello">>)),
-    ?assertThrow(?badarg, validate_type(atom, <<"non_existing_atom_something">>)).
+validate_type_float_test_() -> [
+    ?_assertEqual(1, validate_type(float, 1)),
+    ?_assertEqual(1, validate_type(float, "1")),
+    ?_assertEqual(1, validate_type(float, <<"1">>)),
+    ?_assertEqual(1.1, validate_type(float, <<"1.1">>)),
+    ?_assertThrow(?badarg, validate_type(float, <<"hello">>)),
+    ?_assertThrow(?badarg, validate_type(float, <<"1.">>))
+    ].
 
-validate_type_binary_test() ->
-    ?assertEqual(<<"1">>, validate_type(binary, 1)),
-    ?assertEqual(<<"1">>, validate_type(binary, <<"1">>)),
-    ?assertEqual(<<"1">>, validate_type(binary, "1")).
+validate_type_atom_test_() -> [
+    ?_assertEqual(hello, validate_type(atom, hello)),
+    ?_assertEqual(hello, validate_type(atom, <<"hello">>)),
+    ?_assertThrow(?badarg, validate_type(atom, <<"non_existing_atom_something">>))
+    ].
 
-validate_type_list_test() ->
-    ?assertEqual([1], validate_type([list, int], 1)),
-    ?assertEqual([1,2], validate_type([list, int], [1,2])),
-    ?assertEqual([1,2], validate_type([list, int], ["1",<<"2">>])),
-    ?assertThrow(?badarg, validate_type([list, int], [1,2,"hello"])).
+validate_type_binary_test_() -> [
+    ?_assertEqual(<<"1">>, validate_type(binary, 1)),
+    ?_assertEqual(<<"1">>, validate_type(binary, <<"1">>)),
+    ?_assertEqual(<<"1">>, validate_type(binary, "1"))
+    ].
 
-validate_type_map_test() ->
-    ?assertEqual(#{1 => 2, 3 => 4}, validate_type(
-        [map, int, int], #{1 => 2, 3 =>4})),
-    ?assertEqual(#{1 => 2, 3 => 4}, validate_type(
-        [map, int, int], [{1, 2}, {3, 4}])),
-    ?assertEqual(#{1 => 2, 3 => 4}, validate_type(
-        [map, int, int], #{"1" => <<"2">>, <<"3">> => "4"})).
+validate_type_list_test_() -> [
+    ?_assertEqual([1], validate_type({list, int}, 1)),
+    ?_assertEqual([1,2], validate_type({list, int}, [1,2])),
+    ?_assertEqual([1,2], validate_type({list, int}, ["1",<<"2">>])),
+    ?_assertThrow(?badarg, validate_type({list, int}, [1,2,"hello"]))
+    ].
+
+validate_type_map_test_() -> [
+    ?_assertEqual(#{1 => 2, 3 => 4}, validate_type(
+        {map, int, int}, #{1 => 2, 3 =>4})),
+    ?_assertEqual(#{1 => 2, 3 => 4}, validate_type(
+        {map, int, int}, [{1, 2}, {3, 4}])),
+    ?_assertEqual(#{1 => 2, 3 => 4}, validate_type(
+        {map, int, int}, #{"1" => <<"2">>, <<"3">> => "4"}))
+    ].
     
-validate_badspec_test() ->
-    ?assertThrow(badspec, validate_constraint(1, [{1, 2}])),
-    ?assertThrow(badspec, validate_type([map, int], [{1, 2}])),
-    ?assertThrow(badspec, validate_type([list, int, int], [1,2,"hello"])).
+validate_badspec_test_() -> [
+    ?_assertThrow(badspec, validate_constraint(1, [{1, 2}])),
+    ?_assertThrow(badspec, validate_type({map, int}, [{1, 2}])),
+    ?_assertThrow(badspec, validate_type({list, int, int}, [1,2,"hello"]))
+    ].
 
 -endif.
