@@ -110,6 +110,11 @@ validate_constraint([{gt, MaxVal} | T], Value) ->
 validate_constraint([{gte, MaxVal} | T], Value) ->
     if Value >= MaxVal -> validate_constraint(T, Value);
         true -> throw({badarg, {constraint, '>=', MaxVal}}) end;
+validate_constraint([{oneof, List} | T], Value) ->
+    case lists:member(Value, List) of
+        true -> validate_constraint(T, Value);
+        false -> throw({badarg, {constraint, 'oneof', List}})
+    end;
 validate_constraint([{optional, _} | T], Value) ->
     validate_constraint(T, Value);
 
@@ -176,6 +181,15 @@ constraint_test_() ->
     ?_assertThrow(?badarg, F([{type, int}, {gt, 0}], <<"-1">>)),
 
     ?_assertThrow(badspec, F([{type, int}, {gt, 0, 1}], 1))
+    ].
+
+constraint_oneof_test_() ->
+    F = fun validate_constraint/2,
+    [
+    ?_assertEqual(<<"foo">>, F(#{type => binary, oneof => [<<"foo">>, <<"bar">>]}, <<"foo">>)),
+    ?_assertEqual(<<"bar">>, F(#{type => binary, oneof => [<<"foo">>, <<"bar">>]}, <<"bar">>)),
+
+    ?_assertThrow(?badarg, F([{type, int}, {oneof, [<<"foo">>, <<"bar">>]}], <<"baz">>))
     ].
 
 sanitize_test_inputs(Expected, Spec, Inputs) ->
