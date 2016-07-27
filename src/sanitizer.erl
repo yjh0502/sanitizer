@@ -88,6 +88,8 @@ validate_type({list, Spec}, Given) when is_list(Given) ->
 validate_type({list, Spec}, Given) ->
     validate_type({list, Spec}, [Given]);
 
+validate_type(any, Given) -> Given;
+
 validate_type(_Type, _Spec) ->
     throw(badspec).
 
