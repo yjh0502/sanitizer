@@ -1,17 +1,10 @@
-{application, sanitizer,
- [
-  {description, "An Erlang sanitizer library"},
-  {vsn, "0.0.1"},
-  {modules, [
-             sanitizer
-            ]},
-  {registered, []},
-  {applications, [
-                  kernel,
-                  stdlib
-                 ]},
-  {env, []},
-  {maintainers, ["Jihyun Yu"]},
-  {licenses, ["BSD"]},
-  {links, [{"Github", "https://github.com/yjh0502/sanitizer"}]}
- ]}.
+{application,sanitizer,
+             [{description,"An Erlang sanitizer library"},
+              {vsn,"0.0.2"},
+              {modules,[sanitizer]},
+              {registered,[]},
+              {applications,[kernel,stdlib]},
+              {env,[]},
+              {maintainers,["Jihyun Yu"]},
+              {licenses,["BSD"]},
+              {links,[{"Github","https://github.com/yjh0502/sanitizer"}]}]}.
