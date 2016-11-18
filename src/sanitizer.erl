@@ -35,11 +35,8 @@ validate_type(bool, true) -> true;
 validate_type(bool, <<"true">>) -> true;
 validate_type(bool, false) -> false;
 validate_type(bool, <<"false">>) -> false;
-validate_type(bool, Given) when is_integer(Given) ->
-    case Given of
-        0 -> false;
-        _Other -> true
-    end;
+validate_type(bool, 0) -> false;
+validate_type(bool, Int) when is_integer(Int) -> true;
 validate_type(bool, _Other) -> throw({badarg, {shouldbool, _Other}});
 
 validate_type(int, Given) when is_integer(Given) -> Given;
@@ -93,9 +90,8 @@ validate_type(any, Given) -> Given;
 validate_type(_Type, _Spec) ->
     throw(badspec).
 
-validate_constraint(Spec, Value) when is_map(Spec) ->
-    Type = maps:get(type, Spec),
-    ListSpec = [{type, Type} | maps:to_list(Spec)],
+validate_constraint(#{type := Type} = Spec, Value) ->
+    ListSpec = [{type, Type} | maps:to_list(maps:without([type, optional, default], Spec))],
     validate_constraint(ListSpec, Value);
 
 validate_constraint([{type, TypeDesc} | T], Value) ->
@@ -117,13 +113,11 @@ validate_constraint([{oneof, List} | T], Value) ->
         true -> validate_constraint(T, Value);
         false -> throw({badarg, {constraint, 'oneof', List}})
     end;
-validate_constraint([{optional, _} | T], Value) ->
-    validate_constraint(T, Value);
 
 validate_constraint([], Value) -> Value;
 
 %% Shortcut: TypeSpec -> [{type, TypeSpec}]
-validate_constraint(TypeSpec, Value) when is_atom(TypeSpec); is_tuple(TypeSpec) ->
+validate_constraint(TypeSpec, Value) when is_atom(TypeSpec) orelse is_tuple(TypeSpec) ->
     validate_type(TypeSpec, Value);
 
 validate_constraint(_Spec, _Value) ->
@@ -138,20 +132,26 @@ validate_key(Key) -> throw({badarg, {badkey, Key}}).
 
 -spec sanitize(specs(), any()) -> #{atom() => any()}.
 sanitize(Spec, Args) ->
-    AtomArgs = lists:map(fun({Key, Val}) -> {validate_key(Key), Val} end, maps:to_list(Args)),
-    SanitizeKey = fun({Key, DescSpec}) ->
-        Optional = case DescSpec of
-            #{optional := O} -> O;
-            _ -> false
+    AtomArgs = [{validate_key(Key), Val} || {Key, Val} <- maps:to_list(Args)],
+    SanitizeKey = fun({Key, DescSpec0}) ->
+        DescSpec = if
+            is_map(DescSpec0) -> DescSpec0;
+            is_list(DescSpec0) -> maps:from_list(DescSpec0);
+            true -> #{type => DescSpec0}
         end,
-        case {Optional, lists:keyfind(Key, 1, AtomArgs)} of
-            {true, false} ->
+        Optional = maps:get(optional, DescSpec, false),
+        Value = case lists:keyfind(Key, 1, AtomArgs) of
+            {Key, Val} -> Val;
+            false -> maps:get(default, DescSpec, undefined)
+        end,
+        case {Optional, Value} of
+            {true, undefined} ->
                 {Key, undefined};
-            {true, {_, <<>>}} ->
+            {true, <<>>} ->
                 {Key, undefined};
-            {false, false} ->
+            {false, undefined} ->
                 throw({badarg, {badkey, Key}});
-            {_, {_, Value}} ->
+            {_, _} ->
                 try {Key, validate_constraint(DescSpec, Value)} of
                     Sanitized -> Sanitized
                 catch
@@ -194,10 +194,8 @@ constraint_oneof_test_() ->
     ?_assertThrow(?badarg, F([{type, int}, {oneof, [<<"foo">>, <<"bar">>]}], <<"baz">>))
     ].
 
-sanitize_test_inputs(Expected, Spec, Inputs) ->
-    lists:map(fun(Input) ->
-        ?_assertEqual(Expected, sanitize(Spec, Input))
-    end, Inputs).
+-define(SANITIZE_TEST_INPUTS(Expected, Spec, Inputs),
+    [?_assertEqual(Expected, sanitize(Spec, Input)) || Input <- Inputs]).
 
 sanitize_test_() -> [
     ?_assertThrow(?badarg, sanitize(#{hello => #{type => int}}, #{})),
@@ -210,7 +208,7 @@ sanitize_test_() -> [
     ?_assertEqual(#{hello => true},
         sanitize(#{hello => #{type => bool}}, #{<<"hello">> => true}))
     ]
-    ++ sanitize_test_inputs(
+    ++ ?SANITIZE_TEST_INPUTS(
         #{hello => #{<<"hello">> => 1}},
         #{hello => {map, binary, #{type=>int, gte=>0}}},
         [
@@ -218,7 +216,7 @@ sanitize_test_() -> [
             #{hello => [{<<"hello">>, 1}]}
         ])
 
-    ++ sanitize_test_inputs(
+    ++ ?SANITIZE_TEST_INPUTS(
         #{hello => 1},
         #{hello => #{type => int}},
         [
@@ -235,14 +233,14 @@ sanitize_invalid_key_test_() -> [
     ].
 
 sanitize_order_test_() ->
-    sanitize_test_inputs(
+    ?SANITIZE_TEST_INPUTS(
         #{hello => 1, world => <<"world">>},
         #{hello => #{type => int}, world => #{type => binary}},
         [
             #{hello => 1, world => world},
             #{world => <<"world">>, hello => <<"1">>}
         ])
-    ++ sanitize_test_inputs(
+    ++ ?SANITIZE_TEST_INPUTS(
         #{world => <<"world">>, hello => 1},
         #{world => #{type => binary}, hello => #{type => int}},
         [
@@ -267,6 +265,15 @@ sanitize_optional_test_() -> [
     ?_assertEqual(#{hello => 1},
         sanitize(#{hello => #{type => int, optional => false}},
             #{hello => <<"1">>}))
+    ].
+
+sanitize_default_test_() -> [
+    ?_assertEqual(#{hello => 1, world => 10},
+        sanitize(#{hello => #{type => int}, world => #{type => int, default => 10}},
+            #{hello => <<"1">>})),
+    ?_assertEqual(#{hello => 1, world => 3},
+        sanitize(#{hello => #{type => int}, world => #{type => int, default => 10}},
+            #{hello => <<"1">>, world => <<"3">>}))
     ].
 
 validate_type_bool_test_() -> [
